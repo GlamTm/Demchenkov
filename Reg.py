@@ -206,38 +206,41 @@ class Ui_MainWindow(object):
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
 
-    # 1. Создаём оба окна как QMainWindow
+
     login_window = QtWidgets.QMainWindow()
     register_window = QtWidgets.QMainWindow()
+    MainWindow_window = QtWidgets.QMainWindow()
 
-    # 2. Настраиваем интерфейсы
+
     ui_login = Ui_Login()
     ui_login.setupUi(login_window)
 
     ui_register = Ui_Register()
     ui_register.setupUi(register_window)
 
-    # 3. Прячем окно регистрации, показываем только окно входа
+    ui_MainWindow = Ui_MainWindow()
+    ui_MainWindow.setupUi(MainWindow_window)
+
+
+
+    MainWindow_window.hide()
     register_window.hide()
     login_window.show()
+    def go_to_main():
+        MainWindow_window.show()
+        login_window.hide()
 
-    # 4. Переход: при нажатии «Registration» в окне входа
+    ui_login.pushButton_Login.clicked.connect(go_to_main)
+
     def go_to_register():
-        login_window.hide()          # или login_window.showMinimized() если нужно свернуть в панель
+        login_window.hide()
         register_window.show()
 
     ui_login.pushButton_Cancel.clicked.connect(go_to_register)
 
-    # 5. (Опционально) Обратный переход: при закрытии окна регистрации – показать вход
-    #    Можно повесить на кнопку «Registration» в форме регистрации (после успешной регистрации)
     def back_to_login():
         register_window.hide()
         login_window.show()
 
-    ui_register.pushButton_Cancel.clicked.connect(back_to_login)   # теперь эта кнопка возвращает назад
-
-    # Если нужно, чтобы при закрытии регистрации (крестик) тоже возвращало:
-    # register_window.closeEvent = lambda event: (back_to_login(), event.ignore())
-    # Но лучше переопределить в подклассе.
-
+    ui_register.pushButton_Cancel.clicked.connect(back_to_login)
     sys.exit(app.exec_())
