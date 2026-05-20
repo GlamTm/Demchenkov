@@ -445,21 +445,69 @@ class Ui_MainWindow(object):
         self.label_NetIncomeTitle.setText(_translate("MainWindow", "Доход :"))
 
 def get_totals():
-    """Возвращает (суммарный_доход, суммарный_налог) для текущего пользователя."""
+    """Возвращает (суммарный_доход, суммарный_налог) из таблицы user_totals."""
     global current_user_id
     if current_user_id is None:
         return 0.0, 0.0
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT COALESCE(SUM(amount), 0), COALESCE(SUM(tax), 0) FROM income WHERE user_id = %s",
+        "SELECT total_income, total_tax FROM user_totals WHERE user_id = %s",
         (current_user_id,)
     )
-    total_income, total_tax = cur.fetchone()
+    row = cur.fetchone()
     cur.close()
     conn.close()
-    return float(total_income), float(total_tax)
+    if row:
+        return float(row[0]), float(row[1])
+    return 0.0, 0.0
 
+def save_income(amount):
+    """
+    Добавляет доход, вычисляя налог нарастающим итогом:
+    налог с (старый_доход + amount) минус уже уплаченный налог.
+    Обновляет таблицу user_totals.
+    """
+    global current_user_id
+    if current_user_id is None:
+        return False, "Пользователь не авторизован."
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # Текущие итоги
+        cur.execute("SELECT total_income, total_tax FROM user_totals WHERE user_id = %s FOR UPDATE",
+                    (current_user_id,))
+        row = cur.fetchone()
+        if not row:
+            # На случай, если записи нет (должна быть)
+            cur.execute("INSERT INTO user_totals (user_id) VALUES (%s)", (current_user_id,))
+            total_income, total_tax = 0.0, 0.0
+        else:
+            total_income, total_tax = float(row[0]), float(row[1])
+
+        new_total_income = total_income + amount
+        new_total_tax = calculate_tax(new_total_income)
+        tax_due = new_total_tax - total_tax   # добавочный налог
+
+        # Сохраняем запись о доходе
+        cur.execute(
+            "INSERT INTO income (user_id, amount, tax) VALUES (%s, %s, %s)",
+            (current_user_id, amount, tax_due)
+        )
+        # Обновляем итоги
+        cur.execute(
+            "UPDATE user_totals SET total_income = %s, total_tax = %s WHERE user_id = %s",
+            (new_total_income, new_total_tax, current_user_id)
+        )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        cur.close()
+        conn.close()
+        return False, f"Ошибка сохранения: {e}"
+    cur.close()
+    conn.close()
+    return True, "Доход сохранён."
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
@@ -484,72 +532,44 @@ if __name__ == "__main__":
 
     # ---------------- Логика главного окна ----------------
     def update_tax_display():
-        """Вычисляет налог для введённой суммы и показывает процент, сумму налога, чистый доход."""
         text = ui_MainWindow.Income.text().strip()
         if not text:
             ui_MainWindow.label_TaxProc.setText("")
             ui_MainWindow.label_TaxRubValue.setText("")
             ui_MainWindow.label_NetIncomeValue.setText("")
-            return
-        try:
-            income = float(text)
-            if income < 0:
-                ui_MainWindow.label_TaxProc.setText("")
-                ui_MainWindow.label_TaxRubValue.setText("")
-                ui_MainWindow.label_NetIncomeValue.setText("")
-                return
-            tax = calculate_tax(income)
-            net_income = income - tax
-            if income <= 5_000_000:
-                rate = "13%"
-            else:
-                rate = "13% на 5 млн + 15% сверх"
-            ui_MainWindow.label_TaxProc.setText(rate)
-            ui_MainWindow.label_TaxRubValue.setText(f"{tax:,.2f}")
-            ui_MainWindow.label_NetIncomeValue.setText(f"{net_income:,.2f}")
-        except ValueError:
-            ui_MainWindow.label_TaxProc.setText("")
-            ui_MainWindow.label_TaxRubValue.setText("")
-            ui_MainWindow.label_NetIncomeValue.setText("")
-
-    def save_and_update():
-        """Сохраняет текущий доход и обновляет итоговые суммы."""
-        text = ui_MainWindow.Income.text().strip()
-        if not text:
-            QMessageBox.warning(MainWindow_window, "Ошибка", "Введите сумму дохода.")
+            ui_MainWindow.label_NewTaxValue.setText("")  # новый label, см. п.6
             return
         try:
             income = float(text)
             if income <= 0:
-                QMessageBox.warning(MainWindow_window, "Ошибка", "Сумма должна быть положительной.")
+                ui_MainWindow.label_TaxProc.setText("")
+                ui_MainWindow.label_TaxRubValue.setText("")
+                ui_MainWindow.label_NetIncomeValue.setText("")
+                ui_MainWindow.label_NewTaxValue.setText("")
                 return
+
+            # Получаем текущие накопления
+            cur_income, cur_tax = get_totals()
+            new_total_income = cur_income + income
+            new_total_tax = calculate_tax(new_total_income)
+            added_tax = new_total_tax - cur_tax  # налог, который прибавится
+            net_after_all = new_total_income - new_total_tax
+
+            # Ставка для информации
+            if new_total_income <= 5_000_000:
+                rate = "13%"
+            else:
+                rate = "13% на первые 5 млн + 15% свыше"
+
+            ui_MainWindow.label_TaxProc.setText(rate)
+            ui_MainWindow.label_NewTaxValue.setText(f"{added_tax:,.2f}")  # новый label
+            ui_MainWindow.label_TaxRubValue.setText(f"{new_total_tax:,.2f}")  # итоговый налог
+            ui_MainWindow.label_NetIncomeValue.setText(f"{net_after_all:,.2f}")
         except ValueError:
-            QMessageBox.warning(MainWindow_window, "Ошибка", "Некорректная сумма.")
-            return
-
-        success, msg = save_income(income)
-        if success:
-            # Обновить итоговые метки
-            total_income, total_tax = get_totals()
-            ui_MainWindow.label_Sum.setText(f"{total_income:,.2f}")
-            ui_MainWindow.label_SumTax.setText(f"{total_tax:,.2f}")
-            ui_MainWindow.Income.clear()
-            ui_MainWindow.label_TaxProc.clear()
-            QMessageBox.information(MainWindow_window, "Успех", msg)
-        else:
-            QMessageBox.critical(MainWindow_window, "Ошибка", msg)
-        ui_MainWindow.label_TaxRubValue.clear()
-        ui_MainWindow.label_NetIncomeValue.clear()
-
-    def load_totals():
-        """Загружает накопленные суммы и отображает их."""
-        total_income, total_tax = get_totals()
-        ui_MainWindow.label_Sum.setText(f"{total_income:,.2f}")
-        ui_MainWindow.label_SumTax.setText(f"{total_tax:,.2f}")
-
-    # Сигналы главного окна
-    ui_MainWindow.Income.textChanged.connect(update_tax_display)
-    ui_MainWindow.pushButton_Save.clicked.connect(save_and_update)
+            ui_MainWindow.label_TaxProc.setText("")
+            ui_MainWindow.label_TaxRubValue.setText("")
+            ui_MainWindow.label_NetIncomeValue.setText("")
+            ui_MainWindow.label_NewTaxValue.setText("")
 
     # ---------------- Обработчики логина/регистрации ----------------
     def try_login():
