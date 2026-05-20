@@ -73,9 +73,34 @@ def init_db():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                 """)
+    cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_totals
+                (
+                    user_id
+                    INTEGER
+                    PRIMARY
+                    KEY
+                    REFERENCES
+                    users
+                (
+                    id
+                ) ON DELETE CASCADE,
+                    total_income NUMERIC
+                (
+                    12,
+                    2
+                ) NOT NULL DEFAULT 0,
+                    total_tax NUMERIC
+                (
+                    12,
+                    2
+                ) NOT NULL DEFAULT 0
+                    );
+                """)
     conn.commit()
     cur.close()
     conn.close()
+
 
 
 def hash_password(password):
@@ -134,42 +159,38 @@ def do_registration():
 def register_user(username, password, email):
     conn = get_db_connection()
     cur = conn.cursor()
-
-    # Проверка уникальности логина (без учёта регистра)
     cur.execute("SELECT id FROM users WHERE LOWER(login) = LOWER(%s)", (username,))
     if cur.fetchone():
         cur.close()
         conn.close()
         return False, "Пользователь с таким логином уже существует."
-
     email = email.strip() if email else ''
     if email:
-        # Проверка формата email
         if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
             cur.close()
             conn.close()
             return False, "Некорректный формат email."
-
-        # Проверка уникальности email (без учёта регистра)
         cur.execute("SELECT id FROM users WHERE LOWER(email) = LOWER(%s)", (email,))
         if cur.fetchone():
             cur.close()
             conn.close()
             return False, "Пользователь с таким email уже существует."
-
     pwd_hash = hash_password(password)
     try:
+        # Вставляем пользователя и получаем его id
         cur.execute(
-            "INSERT INTO users (login, password_hash, email) VALUES (%s, %s, %s)",
+            "INSERT INTO users (login, password_hash, email) VALUES (%s, %s, %s) RETURNING id",
             (username, pwd_hash, email)
         )
+        user_id = cur.fetchone()[0]
+        # Создаём запись в user_totals с нулями
+        cur.execute("INSERT INTO user_totals (user_id) VALUES (%s)", (user_id,))
         conn.commit()
     except Exception as e:
         conn.rollback()
         cur.close()
         conn.close()
         return False, f"Ошибка регистрации: {e}"
-
     cur.close()
     conn.close()
     return True, "Регистрация прошла успешно!"
