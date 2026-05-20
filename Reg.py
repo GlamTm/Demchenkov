@@ -1,9 +1,153 @@
 import sys
+import hashlib
 from PyQt5 import QtWidgets, QtCore, QtGui
+from PyQt5.QtWidgets import QMessageBox
+import psycopg2
+import re
+from psycopg2 import sql
 
+DB_CONFIG = {
+    'dbname': 'postgres',              # имя вашей базы данных (обычно postgres)
+    'user': 'postgres',
+    'password': 'a4815162342A',
+    'host': 'localhost',
+    'port': 5432,
+    'client_encoding': 'utf8'          # исправляет UnicodeDecodeError
+}
+
+current_user_id = None                 # глобально хранит id залогиненного пользователя
+
+def get_db_connection():
+    return psycopg2.connect(**DB_CONFIG)
+
+def init_db():
+    """Создаёт таблицу users, если её ещё нет."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            login VARCHAR(50) UNIQUE NOT NULL,
+            password_hash VARCHAR(64) NOT NULL,
+            email VARCHAR(100),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def hash_password(password):
+    """Возвращает SHA-256 хеш пароля."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def login_user(login_or_email, password):
+    """
+    Проверяет логин/пароль.
+    Если введён email (содержит '@'), ищет по email.
+    Иначе ищет по логину. Регистр не учитывается.
+    """
+    global current_user_id
+    conn = get_db_connection()
+    cur = conn.cursor()
+    pwd_hash = hash_password(password)
+
+    if '@' in login_or_email:
+        # поиск по email (без учёта регистра)
+        cur.execute(
+            "SELECT id FROM users WHERE LOWER(email) = LOWER(%s) AND password_hash = %s",
+            (login_or_email, pwd_hash)
+        )
+    else:
+        # поиск по логину (без учёта регистра)
+        cur.execute(
+            "SELECT id FROM users WHERE LOWER(login) = LOWER(%s) AND password_hash = %s",
+            (login_or_email, pwd_hash)
+        )
+
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if row:
+        current_user_id = row[0]
+        return True
+    return False
+
+def do_registration():
+    username = ui_register.line_User.text().strip()
+    password = ui_register.line_Password.text().strip()
+    email = ui_register.line_Email.text().strip()
+    if not username or not password:
+        QMessageBox.warning(register_window, "Ошибка", "Логин и пароль обязательны.")
+        return
+    if not email:
+        QMessageBox.warning(register_window, "Ошибка", "Введите Email")
+        return
+    success, message = register_user(username, password, email)
+    if success:
+        QMessageBox.information(register_window, "Успех", message)
+        register_window.hide()
+        login_window.show()
+        ui_register.line_User.clear()
+        ui_register.line_Password.clear()
+        ui_register.line_Email.clear()
+    else:
+        QMessageBox.critical(register_window, "Ошибка", message)
+
+def register_user(username, password, email):
+    """
+    Регистрирует пользователя.
+    Проверяет уникальность логина и email (без учёта регистра).
+    Проверяет формат email, если он указан.
+    Возвращает (True/False, сообщение).
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    # Проверка уникальности логина (без учёта регистра)
+    cur.execute("SELECT id FROM users WHERE LOWER(login) = LOWER(%s)", (username,))
+    if cur.fetchone():
+        cur.close()
+        conn.close()
+        return False, "Пользователь с таким логином уже существует."
+
+    email = email.strip() if email else ''
+    if email:
+        # Проверка формата email
+        if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
+            cur.close()
+            conn.close()
+            return False, "Некорректный формат email."
+
+        # Проверка уникальности email (без учёта регистра)
+        cur.execute("SELECT id FROM users WHERE LOWER(email) = LOWER(%s)", (email,))
+        if cur.fetchone():
+            cur.close()
+            conn.close()
+            return False, "Пользователь с таким email уже существует."
+
+    pwd_hash = hash_password(password)
+    try:
+        cur.execute(
+            "INSERT INTO users (login, password_hash, email) VALUES (%s, %s, %s)",
+            (username, pwd_hash, email)
+        )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        cur.close()
+        conn.close()
+        return False, f"Ошибка регистрации: {e}"
+
+    cur.close()
+    conn.close()
+    return True, "Регистрация прошла успешно!"
+
+
+# ==================== UI-классы без изменений ====================
 class Ui_Register(object):
     def setupUi(self, Register):
-        # ... весь ваш код без изменений ...
         Register.setObjectName("Register")
         Register.resize(300, 300)
         self.centralwidget = QtWidgets.QWidget(Register)
@@ -49,7 +193,6 @@ class Ui_Register(object):
 
         self.retranslateUi(Register)
         QtCore.QMetaObject.connectSlotsByName(Register)
-
 
     def retranslateUi(self, Register):
         _translate = QtCore.QCoreApplication.translate
@@ -119,16 +262,13 @@ class Ui_Login(object):
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         MainWindow.setObjectName("MainWindow")
-        MainWindow.resize(829, 317)
+        MainWindow.resize(365, 317)
         self.centralwidget = QtWidgets.QWidget(MainWindow)
         self.centralwidget.setObjectName("centralwidget")
-        self.AmountTax = QtWidgets.QLineEdit(self.centralwidget)
-        self.AmountTax.setGeometry(QtCore.QRect(160, 50, 161, 31))
-        self.AmountTax.setText("")
-        self.AmountTax.setObjectName("AmountTax")
-        self.TableTax = QtWidgets.QTableView(self.centralwidget)
-        self.TableTax.setGeometry(QtCore.QRect(380, 70, 381, 151))
-        self.TableTax.setObjectName("TableTax")
+        self.Income = QtWidgets.QLineEdit(self.centralwidget)
+        self.Income.setGeometry(QtCore.QRect(160, 50, 161, 31))
+        self.Income.setText("")
+        self.Income.setObjectName("Income")
         self.Lable_sum = QtWidgets.QLabel(self.centralwidget)
         self.Lable_sum.setGeometry(QtCore.QRect(30, 60, 151, 16))
         font = QtGui.QFont()
@@ -137,53 +277,45 @@ class Ui_MainWindow(object):
         font.setWeight(75)
         self.Lable_sum.setFont(font)
         self.Lable_sum.setObjectName("Lable_sum")
-        self.Lable_Tax = QtWidgets.QLabel(self.centralwidget)
-        self.Lable_Tax.setGeometry(QtCore.QRect(30, 100, 121, 16))
+        self.Lable_3 = QtWidgets.QLabel(self.centralwidget)
+        self.Lable_3.setGeometry(QtCore.QRect(30, 100, 121, 16))
         font = QtGui.QFont()
         font.setPointSize(12)
         font.setBold(True)
         font.setWeight(75)
-        self.Lable_Tax.setFont(font)
-        self.Lable_Tax.setObjectName("Lable_Tax")
-        self.Tax = QtWidgets.QLineEdit(self.centralwidget)
-        self.Tax.setGeometry(QtCore.QRect(100, 90, 161, 31))
-        self.Tax.setText("")
-        self.Tax.setObjectName("Tax")
-        self.Lable_Table = QtWidgets.QLabel(self.centralwidget)
-        self.Lable_Table.setGeometry(QtCore.QRect(380, 40, 161, 16))
-        font = QtGui.QFont()
-        font.setPointSize(12)
-        font.setBold(True)
-        font.setWeight(75)
-        self.Lable_Table.setFont(font)
-        self.Lable_Table.setObjectName("Lable_Table")
+        self.Lable_3.setFont(font)
+        self.Lable_3.setObjectName("Lable_3")
         self.pushButton_Save = QtWidgets.QPushButton(self.centralwidget)
         self.pushButton_Save.setGeometry(QtCore.QRect(100, 130, 111, 31))
         self.pushButton_Save.setObjectName("pushButton_Save")
-        self.Lable_sumAmount = QtWidgets.QLabel(self.centralwidget)
-        self.Lable_sumAmount.setGeometry(QtCore.QRect(30, 190, 151, 16))
+        self.Lable_1 = QtWidgets.QLabel(self.centralwidget)
+        self.Lable_1.setGeometry(QtCore.QRect(30, 190, 151, 16))
         font = QtGui.QFont()
         font.setPointSize(12)
         font.setBold(True)
         font.setWeight(75)
-        self.Lable_sumAmount.setFont(font)
-        self.Lable_sumAmount.setObjectName("Lable_sumAmount")
-        self.Lable_sumTax = QtWidgets.QLabel(self.centralwidget)
-        self.Lable_sumTax.setGeometry(QtCore.QRect(30, 230, 151, 16))
+        self.Lable_1.setFont(font)
+        self.Lable_1.setObjectName("Lable_1")
+        self.Lable_2 = QtWidgets.QLabel(self.centralwidget)
+        self.Lable_2.setGeometry(QtCore.QRect(30, 230, 151, 16))
         font = QtGui.QFont()
         font.setPointSize(12)
         font.setBold(True)
         font.setWeight(75)
-        self.Lable_sumTax.setFont(font)
-        self.Lable_sumTax.setObjectName("Lable_sumTax")
-        self.label = QtWidgets.QLabel(self.centralwidget)
-        self.label.setGeometry(QtCore.QRect(160, 190, 141, 21))
-        self.label.setText("")
-        self.label.setObjectName("label")
-        self.label_2 = QtWidgets.QLabel(self.centralwidget)
-        self.label_2.setGeometry(QtCore.QRect(160, 230, 141, 21))
-        self.label_2.setText("")
-        self.label_2.setObjectName("label_2")
+        self.Lable_2.setFont(font)
+        self.Lable_2.setObjectName("Lable_2")
+        self.label_Sum = QtWidgets.QLabel(self.centralwidget)
+        self.label_Sum.setGeometry(QtCore.QRect(160, 190, 141, 21))
+        self.label_Sum.setText("")
+        self.label_Sum.setObjectName("label_Sum")
+        self.label_SumTax = QtWidgets.QLabel(self.centralwidget)
+        self.label_SumTax.setGeometry(QtCore.QRect(160, 230, 141, 21))
+        self.label_SumTax.setText("")
+        self.label_SumTax.setObjectName("label_SumTax")
+        self.label_TaxProc = QtWidgets.QLabel(self.centralwidget)
+        self.label_TaxProc.setGeometry(QtCore.QRect(100, 100, 141, 21))
+        self.label_TaxProc.setText("")
+        self.label_TaxProc.setObjectName("label_TaxProc")
         MainWindow.setCentralWidget(self.centralwidget)
         self.statusbar = QtWidgets.QStatusBar(MainWindow)
         self.statusbar.setObjectName("statusbar")
@@ -196,21 +328,20 @@ class Ui_MainWindow(object):
         _translate = QtCore.QCoreApplication.translate
         MainWindow.setWindowTitle(_translate("MainWindow", "MainWindow"))
         self.Lable_sum.setText(_translate("MainWindow", "Введите сумму:"))
-        self.Lable_Tax.setText(_translate("MainWindow", "Налог:"))
-        self.Lable_Table.setText(_translate("MainWindow", "Таблица налогов:"))
+        self.Lable_3.setText(_translate("MainWindow", "Налог:"))
         self.pushButton_Save.setText(_translate("MainWindow", "Сохранить"))
-        self.Lable_sumAmount.setText(_translate("MainWindow", "Сумма дохода:"))
-        self.Lable_sumTax.setText(_translate("MainWindow", "Сумма налога:"))
+        self.Lable_1.setText(_translate("MainWindow", "Сумма дохода:"))
+        self.Lable_2.setText(_translate("MainWindow", "Сумма налога:"))
 
-
+# ==================== Точка входа ====================
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
 
+    init_db()
 
     login_window = QtWidgets.QMainWindow()
     register_window = QtWidgets.QMainWindow()
     MainWindow_window = QtWidgets.QMainWindow()
-
 
     ui_login = Ui_Login()
     ui_login.setupUi(login_window)
@@ -221,26 +352,52 @@ if __name__ == "__main__":
     ui_MainWindow = Ui_MainWindow()
     ui_MainWindow.setupUi(MainWindow_window)
 
-
-
     MainWindow_window.hide()
     register_window.hide()
     login_window.show()
-    def go_to_main():
-        MainWindow_window.show()
-        login_window.hide()
 
-    ui_login.pushButton_Login.clicked.connect(go_to_main)
+    def try_login():
+        username = ui_login.line_User.text().strip()
+        password = ui_login.line_Password.text().strip()
+        if not username or not password:
+            QMessageBox.warning(login_window, "Ошибка", "Введите логин/email и пароль.")
+            return
+        if login_user(username, password):
+            MainWindow_window.show()
+            login_window.hide()
+        else:
+            QMessageBox.critical(login_window, "Ошибка", "Неверный логин/email или пароль.")
 
     def go_to_register():
         login_window.hide()
         register_window.show()
 
-    ui_login.pushButton_Cancel.clicked.connect(go_to_register)
+    def do_registration():
+        username = ui_register.line_User.text().strip()
+        password = ui_register.line_Password.text().strip()
+        email = ui_register.line_Email.text().strip()
+        if not username or not password:
+            QMessageBox.warning(register_window, "Ошибка", "Логин и пароль обязательны.")
+            return
+        success, message = register_user(username, password, email)
+        if success:
+            QMessageBox.information(register_window, "Успех", message)
+            register_window.hide()
+            login_window.show()
+            ui_register.line_User.clear()
+            ui_register.line_Password.clear()
+            ui_register.line_Email.clear()
+        else:
+            QMessageBox.critical(register_window, "Ошибка", message)
 
     def back_to_login():
         register_window.hide()
         login_window.show()
 
-    ui_register.pushButton_Cancel.clicked.connect(back_to_login)
+    ui_login.pushButton_Login.clicked.connect(try_login)
+    ui_login.pushButton_Cancel.clicked.connect(go_to_register)
+    ui_register.pushButton_Cancel.clicked.connect(do_registration)
+
+    MainWindow_window.closeEvent = lambda event: QtWidgets.qApp.quit()
+
     sys.exit(app.exec_())
