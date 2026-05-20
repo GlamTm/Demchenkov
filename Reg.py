@@ -427,7 +427,7 @@ class Ui_MainWindow(object):
         self.Lable_2.setText(_translate("MainWindow", "Сумма налога:"))
         self.label_NewTaxTitle.setText(_translate("MainWindow", "Добавится налога:"))
         self.label_TaxRubTitle.setText(_translate("MainWindow", "Налог, руб. (итог):"))
-        self.label_NetIncomeTitle.setText(_translate("MainWindow", "Доход после налога:"))
+        self.label_NetIncomeTitle.setText(_translate("MainWindow", "Доход:"))
 
 # ==================== Точка входа ====================
 if __name__ == "__main__":
