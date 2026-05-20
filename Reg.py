@@ -15,7 +15,7 @@ DB_CONFIG = {
     'client_encoding': 'utf8'          # исправляет UnicodeDecodeError
 }
 
-current_user_id = None                 # глобально хранит id залогиненного пользователя
+current_user_id = None
 
 def get_db_connection():
     return psycopg2.connect(**DB_CONFIG)
@@ -144,8 +144,6 @@ def register_user(username, password, email):
     conn.close()
     return True, "Регистрация прошла успешно!"
 
-
-# ==================== UI-классы без изменений ====================
 class Ui_Register(object):
     def setupUi(self, Register):
         Register.setObjectName("Register")
@@ -333,7 +331,6 @@ class Ui_MainWindow(object):
         self.Lable_1.setText(_translate("MainWindow", "Сумма дохода:"))
         self.Lable_2.setText(_translate("MainWindow", "Сумма налога:"))
 
-# ==================== Точка входа ====================
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
 
